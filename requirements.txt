@@ -1,9 +1,0 @@
-fastapi
-uvicorn
-opencv-python
-tensorflow
-torch
-transformers
-librosa
-soundfile
-google-generativeai
