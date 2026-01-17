@@ -1,12 +1,12 @@
 import { create } from 'zustand';
 
 interface AppState {
-  // Signals (Inputs)
+  // Input Signals
   faceSadness: number;
   faceStress: number;
   faceJoy: number;
   
-  // App State (Outputs)
+  // Output State
   currentEmotion: string;
   uiColor: string;
   

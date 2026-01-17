@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Send, Sparkles } from "lucide-react";
 import VideoAnalyzer from "../components/VideoAnalyzer";
@@ -12,6 +12,12 @@ export default function Home() {
   const { faceSadness, faceStress, faceJoy, uiColor, setAppState } = useStore();
   const [isLoading, setIsLoading] = useState(false);
   
+  useEffect(() => {
+    if (uiColor) {
+      document.documentElement.style.setProperty('--app-bg', uiColor);
+    }
+  }, [uiColor]);
+  
   const sendMessage = async () => {
     if (!input.trim()) return;
     const newMessages = [...messages, { role: 'user' as const, text: input }];
@@ -20,6 +26,7 @@ export default function Home() {
     setIsLoading(true);
 
     try {
+      // Connect to your Python Backend
       const res = await fetch("http://localhost:8000/api/process", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -31,18 +38,21 @@ export default function Home() {
           voice_jitter: 0.0
         }),
       });
+      
       const data = await res.json();
       setMessages([...newMessages, { role: 'ai', text: data.reply_text }]);
       setAppState(data.detected_emotion, data.ui_adaptation.theme_color);
-    } catch (e) { console.error(e); } finally { setIsLoading(false); }
+      
+    } catch (e) { 
+      console.error(e);
+      setMessages([...newMessages, { role: 'ai', text: "I can't reach the server. Is the backend running?" }]);
+    } finally { 
+      setIsLoading(false); 
+    }
   };
 
-  useEffect(() => {
-    document.documentElement.style.setProperty('--ui-bg', uiColor);
-  }, [uiColor]);
-
   return (
-    <main className="app-bg min-h-screen flex flex-col items-center justify-center p-4">
+    <main className="app-main min-h-screen flex flex-col items-center justify-center p-4">
       <VideoAnalyzer />
       
       <div className="w-full max-w-md bg-white/60 backdrop-blur-xl rounded-3xl shadow-2xl overflow-hidden h-[80vh] flex flex-col border border-white/50">
@@ -63,9 +73,10 @@ export default function Home() {
 
         <div className="p-4 bg-white/40">
           <div className="flex gap-2 bg-white p-2 rounded-full shadow-sm">
-            <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} placeholder="How do you feel?" className="flex-1 bg-transparent outline-none px-4 text-slate-700"/>
-            <button type="button" onClick={sendMessage} className="p-3 bg-slate-800 text-white rounded-full" aria-label="Send message" title="Send message">
-              <Send className="w-4 h-4" aria-hidden="true"/>
+            <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} placeholder="How do you feel?" className="flex-1 bg-transparent outline-none px-4 text-slate-700" />
+            <button type="button" onClick={sendMessage} aria-label="Send message" title="Send message" className="p-3 bg-slate-800 text-white rounded-full">
+              <Send className="w-4 h-4"/>
+              <span className="sr-only">Send message</span>
             </button>
           </div>
         </div>
