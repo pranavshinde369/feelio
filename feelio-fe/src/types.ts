@@ -29,6 +29,6 @@ export interface PlaybookAction {
   category: 'grounding' | 'reframing' | 'planning';
 }
 
-export type MicState = 'idle' | 'listening' | 'thinking';
+export type MicState = 'idle' | 'listening' | 'thinking' | 'speaking';
 
 export type IntentType = 'ground' | 'reframe' | 'plan';
