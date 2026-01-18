@@ -331,7 +331,7 @@ def internal_error(error):
 # ========== MAIN ==========
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8080))
+    port = int(os.getenv("PORT", 8000))
     host = os.getenv("HOST", "0.0.0.0")
     
     logger.info(f"🚀 Starting Feelio API on {host}:{port}")
