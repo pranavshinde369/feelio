@@ -1,4 +1,4 @@
-import { Mic, MicOff, Shield, Download, Clock } from 'lucide-react';
+import { Mic, MicOff, Shield, Download, Clock, XCircle } from 'lucide-react';
 import { MicState } from '../types';
 
 interface TopBarProps {
@@ -7,6 +7,8 @@ interface TopBarProps {
   micEnabled: boolean;
   onToggleMic: () => void;
   onDownloadSummary: () => void;
+  onEndSession: () => void;
+  sessionStarted: boolean;
 }
 
 export default function TopBar({
@@ -15,6 +17,8 @@ export default function TopBar({
   micEnabled,
   onToggleMic,
   onDownloadSummary,
+  onEndSession,
+  sessionStarted,
 }: TopBarProps) {
   return (
     <div className="fixed top-0 left-0 right-0 z-50 backdrop-blur-md bg-white/70 border-b border-teal-100/50">
@@ -31,13 +35,22 @@ export default function TopBar({
         </div>
 
         <div className="flex items-center gap-3">
+          {sessionStarted && (
+            <button
+              onClick={onEndSession}
+              className="flex items-center gap-2 px-3 py-1.5 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors text-sm font-semibold"
+            >
+              <XCircle className="w-4 h-4" />
+              End Session
+            </button>
+          )}
+
           <button
             onClick={onToggleMic}
-            className={`p-2 rounded-lg transition-all focus:outline-none focus:ring-2 focus:ring-teal-400 ${
-              micEnabled
+            className={`p-2 rounded-lg transition-all focus:outline-none focus:ring-2 focus:ring-teal-400 ${micEnabled
                 ? 'bg-teal-100 text-teal-700 hover:bg-teal-200'
                 : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
-            }`}
+              }`}
             aria-label={micEnabled ? 'Mute microphone' : 'Unmute microphone'}
           >
             {micEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
@@ -45,7 +58,7 @@ export default function TopBar({
 
           <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-teal-50/80 rounded-full text-xs text-teal-700 font-manrope">
             <Shield className="w-3.5 h-3.5" />
-            <span>On-device capture; cloud LLM replies</span>
+            <span>On-device capture</span>
           </div>
 
           <button

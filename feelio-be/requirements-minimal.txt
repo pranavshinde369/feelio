@@ -1,0 +1,10 @@
+# Minimal requirements for API server only (no vision/audio)
+
+# --- Google Gemini ---
+google-generativeai
+python-dotenv
+
+# --- Production Dependencies ---
+Flask==2.2.2
+Flask-Cors==3.0.10
+gunicorn==21.2.0
