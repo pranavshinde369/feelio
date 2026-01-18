@@ -10,12 +10,19 @@ export function useVision(videoRef: React.RefObject<HTMLVideoElement>, isEnabled
   const requestRef = useRef<number>();
 
   useEffect(() => {
+    let isMounted = true;
+
     const loadModel = async () => {
+      if (faceLandmarkerRef.current) return; // Prevent double load
+
       try {
+        console.log("Loading Vision Model...");
         const vision = await FilesetResolver.forVisionTasks(
-          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
+          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm'
         );
-        
+
+        if (!isMounted) return;
+
         faceLandmarkerRef.current = await FaceLandmarker.createFromOptions(vision, {
           baseOptions: {
             modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
@@ -25,17 +32,20 @@ export function useVision(videoRef: React.RefObject<HTMLVideoElement>, isEnabled
           runningMode: 'VIDEO',
           numFaces: 1
         });
-        
-        setIsLoaded(true);
-        console.log('✅ Vision Model Loaded');
+
+        console.log('✅ Vision Model Loaded Successfully');
+        if (isMounted) setIsLoaded(true);
+
       } catch (err) {
-        console.error('Failed to load vision model:', err);
+        console.error('❌ Failed to load vision model:', err);
       }
     };
 
     if (isEnabled && !faceLandmarkerRef.current) {
       loadModel();
     }
+
+    return () => { isMounted = false; };
   }, [isEnabled]);
 
   const processVideo = useCallback(() => {
@@ -48,7 +58,7 @@ export function useVision(videoRef: React.RefObject<HTMLVideoElement>, isEnabled
 
       if (results.faceLandmarks && results.faceLandmarks.length > 0) {
         const landmarks = results.faceLandmarks[0];
-        
+
         // Logic ported from Python:
         // 13: UpperLip, 14: LowerLip, 61: LeftCorner, 291: RightCorner
         const upperLip = landmarks[13].y;
@@ -62,24 +72,24 @@ export function useVision(videoRef: React.RefObject<HTMLVideoElement>, isEnabled
         const smileRatio = lipCenterY - cornerAvgY;
 
         let detected: DetectedEmotion = 'neutral';
-        
+
         // Thresholds from vision_module.py
         if (smileRatio > 0.02) {
-            detected = 'happy';
+          detected = 'happy';
         } else if (mouthOpenDist > 0.05) {
-            detected = 'surprise';
+          detected = 'surprise';
         } else if (smileRatio < -0.015) {
-            detected = 'sad';
+          detected = 'sad';
         } else {
-            detected = 'neutral';
+          detected = 'neutral';
         }
 
         setEmotion(detected);
       }
     }
-    
+
     if (isEnabled) {
-        requestRef.current = requestAnimationFrame(processVideo);
+      requestRef.current = requestAnimationFrame(processVideo);
     }
   }, [isLoaded, isEnabled, videoRef]);
 
@@ -91,7 +101,7 @@ export function useVision(videoRef: React.RefObject<HTMLVideoElement>, isEnabled
         cancelAnimationFrame(requestRef.current);
       }
     }
-    
+
     return () => {
       if (requestRef.current) {
         cancelAnimationFrame(requestRef.current);
