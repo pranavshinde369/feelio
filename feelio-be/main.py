@@ -31,6 +31,8 @@ from therapy_utils import (
 
 # ========== LOGGING SETUP ==========
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 def setup_logging(log_level: str = "INFO") -> None:
     """
     Configure structured logging for the application.
@@ -333,4 +335,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGINT, lambda s, f: sys.exit(0))
+    logging.info('Starting Feelio AI Therapist...')
     sys.exit(main())

@@ -1,6 +1,6 @@
 # --- Core AI & Vision ---
 mediapipe==0.10.14
-tensorflow==2.15.0
+tensorflow>=2.16.1
 protobuf==4.25.3
 opencv-python
 numpy
@@ -14,3 +14,8 @@ SpeechRecognition
 gTTS
 pygame
 pyaudio
+
+# --- Production Dependencies ---
+Flask>=3.0.0
+Flask-Cors==3.0.10
+gunicorn==21.2.0
