@@ -60,3 +60,5 @@ dmypy.json
 *.db
 *.sqlite
 *.sqlite3
+
+echo "feelio_env/" >> .gitignore
