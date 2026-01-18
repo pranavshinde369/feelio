@@ -4,8 +4,6 @@ from gtts import gTTS
 import pygame
 import os
 import time
-import cv2
-from deepface import DeepFace
 import threading
 import re
 from collections import deque
@@ -28,7 +26,7 @@ YOUR GOAL: Validate the user's feelings, then offer a concrete path forward.
 RULES:
 1. THE "VALIDATE -> SOLVE" LOOP: First, acknowledge the emotion (1 sentence). Then, immediately offer a coping strategy, a different perspective (reframing), or a small actionable step.
 2. USE CBT TECHNIQUES: If the user is anxious, suggest grounding. If sad, suggest behavioral activation (small movement). If angry, suggest cooling down.
-3. DETECT CONTRADICTIONS: If the user says "I'm fine" but looks SAD, say: "You're saying you're fine, but you look down. It's okay to admit if you need a solution for that sadness."
+3. DETECT CONTRADICTIONS: If the user says "I'm fine" but sounds SAD, say: "You're saying you're fine, but you sound down. It's okay to admit if you need a solution for that sadness."
 4. BE CONCISE: Keep it under 3 sentences so it speaks quickly.
 5. NO GENERIC ADVICE: Avoid "drink water" or "take a deep breath" unless specific. Give psychological tools.
 """
@@ -38,7 +36,7 @@ model = genai.GenerativeModel(
     system_instruction=therapist_instructions
 )
 
-# Initialize Audio
+# Initialize Audio Mixer
 pygame.mixer.init()
 
 # --- GLOBAL SHARED VARIABLES ---
@@ -152,43 +150,11 @@ def generate_session_summary():
     except Exception as e:
         return f"Summary unavailable: {e}"
 
-def run_vision_system():
-    """
-    Background Thread: Constantly looks at the camera to update 'current_emotion'
-    """
-    global current_emotion, is_running
-    
-    print("📷 Vision System Starting...")
-    # Note: If camera 1 doesn't work, switch back to 0
-    cap = cv2.VideoCapture(0) 
-    
-    while is_running:
-        ret, frame = cap.read()
-        if not ret:
-            continue
-            
-        try:
-            # Analyze frame for emotion
-            analysis = DeepFace.analyze(frame, actions=['emotion'], enforce_detection=False)
-            current_emotion = analysis[0]['dominant_emotion']
-            update_emotion_history(current_emotion)
-            
-            # Visual feedback window
-            cv2.putText(frame, f"Mood: {current_emotion}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            cv2.imshow('Therapist Eyes', frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-                
-        except Exception:
-            pass
-            
-    cap.release()
-    cv2.destroyAllWindows()
 
 def listen_to_user():
     recognizer = sr.Recognizer()
     with sr.Microphone() as source:
-        print(f"\n🎧 Listening... (You look: {current_emotion})")
+        print(f"\n🎧 Listening... (Current emotion: {current_emotion})")
         recognizer.adjust_for_ambient_noise(source, duration=1)
         try:
             audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)
@@ -196,6 +162,7 @@ def listen_to_user():
             return recognizer.recognize_google(audio)
         except:
             return None
+
 
 def get_therapist_response(user_text, chat_history, pace_hint="normal"):
     """
@@ -210,12 +177,12 @@ def get_therapist_response(user_text, chat_history, pace_hint="normal"):
     fusion_prompt = (
         "CONTEXT: Short, solution-focused spoken therapy. "
         f"USER SAID: '{user_text}'. "
-        f"FACIAL EMOTION: '{current_emotion}'. "
+        f"EMOTION STATE: '{current_emotion}'. "
         f"EMOTION TRAJECTORY: {trajectory}. "
         f"CONTRADICTION FLAG: {contradiction}. "
         f"SUGGESTED PLAYBOOK: {playbook}. "
         f"PACE HINT: {pace_hint}. "
-        "INSTRUCTION: 1) Validate based on face + words, 2) offer ONE specific tool right now, 3) keep under 3 sentences, 4) if contradiction, invite gentle clarification, 5) match the pace hint (slightly slower if requested)."
+        "INSTRUCTION: 1) Validate based on words, 2) offer ONE specific tool right now, 3) keep under 3 sentences, 4) if contradiction, invite gentle clarification, 5) match the pace hint (slightly slower if requested)."
     )
 
     try:
@@ -226,6 +193,8 @@ def get_therapist_response(user_text, chat_history, pace_hint="normal"):
     except Exception as e:
         print(f"❌ API Error: {e}")
         return "I'm having a little trouble connecting to my thoughts right now."
+
+
 def speak_response(text, slow=False, pre_pause=0.0):
     timestamp = int(time.time())
     filename = f"response_{timestamp}.mp3"
@@ -246,16 +215,14 @@ def speak_response(text, slow=False, pre_pause=0.0):
     except Exception as e:
         print(f"❌ TTS Error: {e}")
 
+
 def main():
-    global is_running
-    print("--- AI THERAPIST: DR. LIBRA (Vision + Voice) ---")
+    global is_running, current_emotion
+    print("--- AI THERAPIST: DR. LIBRA (Voice-Only Lite) ---")
     
-    # 1. Start the Vision Thread
-    vision_thread = threading.Thread(target=run_vision_system)
-    vision_thread.start()
-    
-    # 2. Wait a moment for camera to warm up
-    time.sleep(2)
+    # Simulate emotion for testing (in lite mode, we don't use vision)
+    current_emotion = "neutral"
+    update_emotion_history(current_emotion)
     
     chat_session = model.start_chat(history=[])
     
@@ -292,11 +259,11 @@ def main():
         print("\nStopping...")
     finally:
         is_running = False
-        vision_thread.join()
         print("System Closed.")
         session_summary = generate_session_summary()
         print("\n--- Session Summary ---")
         print(session_summary)
+
 
 if __name__ == "__main__":
     main()
