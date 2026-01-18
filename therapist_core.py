@@ -6,8 +6,10 @@ import os
 import time
 
 # --- CONFIGURATION ---
-# Replace with your actual API Key
-GEMINI_API_KEY = "AIzaSyBa28c18_TUkmIUbqorLnZbCWigl3ftOhc"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+if not GEMINI_API_KEY:
+    raise RuntimeError("Missing GEMINI_API_KEY environment variable. Set it before running.")
 
 # Configure the Gemini API
 genai.configure(api_key=GEMINI_API_KEY)
