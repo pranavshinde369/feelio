@@ -1,73 +1,55 @@
-import { useState, useEffect, useRef } from 'react';
-import { X } from 'lucide-react';
-import TopBar from './components/TopBar';
-import Transcript from './components/Transcript';
-import SessionMirror from './components/SessionMirror';
-import BottomDock from './components/BottomDock';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { X, Mic, MicOff, Send, Activity, Video as VideoIcon } from 'lucide-react';
 import { apiService } from './services/api';
 import { useVision } from './hooks/useVision';
 import { useTTS } from './hooks/useTTS';
 import {
   MicState,
-  IntentType,
   TranscriptMessage,
   EmotionPoint,
-  PlaybookAction,
   Emotion,
 } from './types';
 
+// Emotion Mapping Colors for Light Theme
+const emotionColors: Record<string, string> = {
+  calm: 'text-teal-600 bg-teal-50 border-teal-200',
+  happy: 'text-amber-600 bg-amber-50 border-amber-200',
+  sad: 'text-blue-600 bg-blue-50 border-blue-200',
+  anxious: 'text-orange-600 bg-orange-50 border-orange-200',
+  neutral: 'text-slate-600 bg-slate-50 border-slate-200',
+  hopeful: 'text-emerald-600 bg-emerald-50 border-emerald-200',
+  confused: 'text-purple-600 bg-purple-50 border-purple-200',
+  surprised: 'text-pink-600 bg-pink-50 border-pink-200',
+};
+
 const emotionIntensityMap: Record<string, number> = {
-  angry: 8,
-  anxious: 7,
-  calm: 3,
-  disgusted: 8,
-  fearful: 7,
-  happy: 2,
-  neutral: 4,
-  overwhelmed: 8,
-  sad: 6,
-  surprised: 5,
-  hopeful: 2,
+  angry: 8, anxious: 7, calm: 3, disgusted: 8, fearful: 7, happy: 2,
+  neutral: 4, overwhelmed: 8, sad: 6, surprised: 5, hopeful: 2,
 };
 
 const emotionMap: Record<string, Emotion> = {
-  angry: 'anxious',
-  anxious: 'anxious',
-  calm: 'calm',
-  disgusted: 'anxious',
-  fearful: 'anxious',
-  happy: 'calm',
-  neutral: 'calm',
-  overwhelmed: 'overwhelmed',
-  sad: 'anxious',
-  surprised: 'calm',
-  hopeful: 'hopeful',
+  angry: 'anxious', anxious: 'anxious', calm: 'calm', disgusted: 'anxious',
+  fearful: 'anxious', happy: 'calm', neutral: 'calm', overwhelmed: 'overwhelmed',
+  sad: 'anxious', surprised: 'calm', hopeful: 'hopeful',
 };
 
 function App() {
   const [micState, setMicState] = useState<MicState>('idle');
-  const [micEnabled, setMicEnabled] = useState(true);
-  const [captionsEnabled, setCaptionsEnabled] = useState(false);
   const [sessionDuration, setSessionDuration] = useState('00:00');
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [emotionHistory, setEmotionHistory] = useState<EmotionPoint[]>([]);
   const [currentEmotion, setCurrentEmotion] = useState<Emotion>('calm');
-  const [currentAction, setCurrentAction] = useState<PlaybookAction>({
-    id: '1',
-    title: 'Start a conversation',
-    description: 'Click the microphone to begin your therapy session.',
-    category: 'planning',
-  });
+  const [inputText, setInputText] = useState('');
+
   const [showSafetyModal, setShowSafetyModal] = useState(false);
   const [sessionStarted, setSessionStarted] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking');
 
   const sessionStartTimeRef = useRef<number | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  const { emotion: detectedEmotion } = useVision(videoRef, sessionStarted);
+  const { emotion: detectedEmotion, isLoaded: visionLoaded } = useVision(videoRef, sessionStarted);
   const { speak, isSpeaking } = useTTS();
 
   // Timer effect
@@ -80,34 +62,27 @@ function App() {
         setSessionDuration(`${minutes}:${seconds.toString().padStart(2, '0')}`);
       }
     }, 1000);
-
     return () => clearInterval(interval);
   }, []);
 
-  // Update backend emotion history when local vision detects new emotion
+  // Sync Vision -> App State
   useEffect(() => {
     if (detectedEmotion && sessionStarted) {
-      // Map DetectedEmotion to App Emotion
       const map: Record<string, Emotion> = {
-        'happy': 'hopeful',
-        'sad': 'sad',
-        'surprise': 'confused',
-        'neutral': 'calm'
+        'happy': 'hopeful', 'sad': 'sad', 'surprise': 'confused', 'neutral': 'calm'
       };
-      const mappedEmotion = map[detectedEmotion] || 'calm';
-      setCurrentEmotion(mappedEmotion);
+      setCurrentEmotion(map[detectedEmotion] || 'calm');
     }
   }, [detectedEmotion, sessionStarted]);
 
-  // Update emotion from history (if backend returns different emotion)
+  // Sync History -> App State
   useEffect(() => {
     if (emotionHistory.length > 0) {
-      const latest = emotionHistory[emotionHistory.length - 1];
-      setCurrentEmotion(latest.emotion);
+      setCurrentEmotion(emotionHistory[emotionHistory.length - 1].emotion);
     }
   }, [emotionHistory]);
 
-  // Start Camera when session starts
+  // Camera Logic
   useEffect(() => {
     const startCamera = async () => {
       if (sessionStarted && videoRef.current) {
@@ -115,15 +90,27 @@ function App() {
           const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
           videoRef.current.srcObject = stream;
         } catch (e) {
-          console.error("Camera access failed", e);
+          console.error("Camera failed", e);
         }
       }
     };
     startCamera();
   }, [sessionStarted]);
 
+  // Backend Check
+  useEffect(() => {
+    const checkBackend = async () => {
+      setBackendStatus('checking');
+      try {
+        const isHealthy = await apiService.healthCheck();
+        setBackendStatus(isHealthy ? 'online' : 'offline');
+      } catch (e) {
+        setBackendStatus('offline');
+      }
+    };
+    checkBackend();
+  }, []);
 
-  // Initialize session
   const initializeSession = async () => {
     try {
       setLoading(true);
@@ -135,13 +122,12 @@ function App() {
       console.log('Session started:', sessionId);
     } catch (error) {
       console.error('Failed to start session:', error);
-      alert('Failed to start session. Make sure backend is running.');
+      alert('Failed to connect to AI Brain. Is the backend running?');
     } finally {
       setLoading(false);
     }
   };
 
-  // End session
   const endSession = async () => {
     if (!sessionStarted) return;
     try {
@@ -155,319 +141,311 @@ function App() {
         videoRef.current.srcObject = null;
       }
       window.speechSynthesis.cancel();
-    } catch (e) {
-      console.error("Error ending session", e);
-    }
+    } catch (e) { console.error(e); }
   };
 
-  // Handle microphone press
-  const handleMicPress = async () => {
-    if (!sessionStarted) {
-      await initializeSession();
-      // Don't return, try to start listening immediately if possible or let user click again
-      // return; 
-    }
+  const detectedEmotionRef = useRef<Emotion>('calm');
 
-    if (micState === 'idle') {
-      try {
-        setMicState('listening');
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const recorder = new MediaRecorder(stream);
-        mediaRecorderRef.current = recorder;
-        audioChunksRef.current = [];
-
-        recorder.ondataavailable = (event) => {
-          audioChunksRef.current.push(event.data);
-        };
-
-        recorder.onstop = async () => {
-          setMicState('thinking');
-          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-          const text = await transcribeAudio(audioBlob);
-
-          if (text) {
-            // Map vision detected emotion to types
-            const map: Record<string, Emotion> = {
-              'happy': 'hopeful',
-              'sad': 'sad',
-              'surprise': 'confused',
-              'neutral': 'calm'
-            };
-            const currentMapped = detectedEmotion ? (map[detectedEmotion] || 'calm') : 'calm';
-
-            // Add user message
-            const userMessage: TranscriptMessage = {
-              id: Date.now().toString(),
-              speaker: 'user',
-              text,
-              timestamp: new Date(),
-              emotion: currentMapped,
-            };
-            setMessages((prev) => [...prev, userMessage]);
-
-            // Get AI response
-            try {
-              // Send text + detected emotion to backend (backend accepts string so raw detectedEmotion is likely fine, or mapped)
-              // Let's send mapped to be consistent with frontend types if backend also uses them?
-              // The backend `app.py` seems to accept any string but keys off specific ones.
-              // Let's send the raw detected string ('happy' etc) if backend supports it, logic in backend `vision_module` produced 'happy','sad','surprise','neutral'.
-              // So backend expects 'happy', 'sad' etc.
-              // We should send `detectedEmotion` raw to backend, but use mapped for Frontend UI.
-
-              const response = await apiService.sendMessage(text, detectedEmotion || 'neutral');
-              const therapistMessage: TranscriptMessage = {
-                id: (Date.now() + 1).toString(),
-                speaker: 'therapist',
-                text: response.response,
-                timestamp: new Date(),
-              };
-              setMessages((prev) => [...prev, therapistMessage]);
-
-              // Update emotion history from backend response
-              // Backend response.emotion might be 'happy', 'sad' etc.
-              // Need to map it back to UI types
-              const backendEmotion = response.emotion;
-              // Add a generic map or reuse existing emotionMap
-              const uiEmotion = (emotionMap[backendEmotion] || map[backendEmotion] || 'calm') as Emotion;
-
-              const intensity = emotionIntensityMap[backendEmotion] || 5;
-              const newEmotionPoint: EmotionPoint = {
-                timestamp: new Date(),
-                emotion: uiEmotion,
-                intensity,
-              };
-              setEmotionHistory((prev) => [...prev, newEmotionPoint]);
-
-              // Speak response
-              speak(response.response);
-
-              // Check for crisis
-              if (response.crisis_detected) {
-                setShowSafetyModal(true);
-              }
-            } catch (error) {
-              console.error('Error getting response:', error);
-              speak("I'm having trouble connecting right now.");
-            }
-          }
-
-          // Stop stream
-          stream.getTracks().forEach((track) => track.stop());
-          setMicState('idle');
-        };
-
-        recorder.start();
-
-        // Stop recording after 10 seconds or when user stops
-        setTimeout(() => {
-          if (recorder.state === 'recording') {
-            recorder.stop();
-          }
-        }, 10000);
-      } catch (error) {
-        console.error('Microphone error:', error);
-        alert('Microphone not available. Please check permissions.');
-        setMicState('idle');
-      }
-    } else if (micState === 'listening') {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-        mediaRecorderRef.current.stop();
-      }
-    }
-  };
-
-  // Transcribe audio (using Web Speech API)
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const transcribeAudio = async (_blob: Blob): Promise<string> => {
-    return new Promise((resolve) => {
-      // Use Web Speech API if available (faster/cheaper than calling backend STT if backend even has it exposed)
-      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (SpeechRecognition) {
-        const recognition = new SpeechRecognition();
-        recognition.continuous = false;
-        recognition.lang = 'en-US';
-
-        recognition.onresult = (event: any) => {
-          const transcript = Array.from(event.results)
-            .map((result: any) => result[0].transcript)
-            .join('');
-          resolve(transcript);
-        };
-        recognition.onerror = (e: any) => {
-          console.error("Speech recognition error", e);
-          resolve('');
-        };
-        recognition.start();
-
-      } else {
-        alert("Speech Recognition not supported in this browser.");
-        resolve('');
-      }
-    });
-  };
-
-  const handleIntentSelect = (intent: IntentType) => {
-    // In a real app we might fetch actions from backend
-    const actions: Record<IntentType, PlaybookAction> = {
-      ground: { id: 'g1', title: '5-4-3-2-1 Grounding', description: 'Name 5 things you see, 4 you feel...', category: 'grounding' },
-      reframe: { id: 'r1', title: 'Reframe Negative Thought', description: 'Is this thought a fact or an opinion?', category: 'reframing' },
-      plan: { id: 'p1', title: 'Make a Micro-Plan', description: 'What is one small step you can take?', category: 'planning' },
-    };
-    setCurrentAction(actions[intent]);
-  };
-
-  const handleToggleMic = () => {
-    setMicEnabled(!micEnabled);
-  };
-
-  const handleToggleCaptions = () => {
-    setCaptionsEnabled(!captionsEnabled);
-  };
-
-  const handleDownloadSummary = () => {
-    console.log('Downloading summary...');
-  };
-
-  const handleOpenSafety = () => {
-    setShowSafetyModal(true);
-  };
-
-  const handleCloseSafety = () => {
-    setShowSafetyModal(false);
-  };
-
-  // Handle initial state
   useEffect(() => {
-    const checkBackend = async () => {
-      try {
-        const isHealthy = await apiService.healthCheck();
-        if (!isHealthy) {
-          // Don't alert immediately, maybe it takes time to wake up (Render/Heroku)
-          console.warn("Backend not healthy yet");
-        }
-      } catch (error) {
-        console.error('Backend check failed:', error);
-      }
+    if (detectedEmotion) {
+      const map: Record<string, Emotion> = { 'happy': 'hopeful', 'sad': 'sad', 'surprise': 'confused', 'neutral': 'calm' };
+      detectedEmotionRef.current = map[detectedEmotion] || 'calm';
+    }
+  }, [detectedEmotion]);
+
+  const handleUserMessage = async (text: string) => {
+    setMicState('thinking');
+    const map: Record<string, Emotion> = { 'happy': 'hopeful', 'sad': 'sad', 'surprise': 'confused', 'neutral': 'calm' };
+
+    // Optimistic UI Update
+    const currentMapped = detectedEmotionRef.current || 'calm';
+
+    const userMsg: TranscriptMessage = {
+      id: Date.now().toString(), speaker: 'user', text, timestamp: new Date(), emotion: currentMapped
     };
-    checkBackend();
-  }, []);
+    setMessages(prev => [...prev, userMsg]);
+    setInputText('');
+
+    try {
+      // Send REAL detected emotion to Backend
+      // Map back to simplified set if needed, but backend takes string.
+      // We pass the RAW detected emotion if possible, or the mapped one.
+      // Let's pass the mapped one as it aligns with UI.
+      const response = await apiService.sendMessage(text, currentMapped);
+
+      const aiMsg: TranscriptMessage = {
+        id: (Date.now() + 1).toString(), speaker: 'therapist', text: response.response, timestamp: new Date()
+      };
+      setMessages(prev => [...prev, aiMsg]);
+
+      // Process Emotion
+      const backendEmotion = response.emotion;
+      const uiEmotion = (emotionMap[backendEmotion] || map[backendEmotion] || 'calm') as Emotion;
+      setEmotionHistory(prev => [...prev, {
+        timestamp: new Date(), emotion: uiEmotion, intensity: emotionIntensityMap[backendEmotion] || 5
+      }]);
+
+      // Speak
+      setMicState('speaking');
+      speak(response.response, () => setMicState('idle'));
+
+      if (response.crisis_detected) setShowSafetyModal(true);
+
+    } catch (e) {
+      console.error("AI Error", e);
+      setMicState('idle');
+      const errorMsg: TranscriptMessage = {
+        id: Date.now().toString(), speaker: 'therapist', text: "I'm having trouble connecting to my brain right now.", timestamp: new Date()
+      };
+      setMessages(prev => [...prev, errorMsg]);
+    }
+  };
+
+  const handleMicPress = useCallback(() => {
+    if (!sessionStarted) { initializeSession(); return; }
+
+    if (micState === 'listening' || micState === 'thinking' || micState === 'speaking') {
+      setMicState('idle');
+      window.speechSynthesis.cancel();
+      return;
+    }
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) { alert("Use Chrome/Edge for voice."); return; }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    setMicState('listening');
+
+    recognition.onresult = (event: any) => {
+      const text = event.results[0][0].transcript;
+      if (text) handleUserMessage(text);
+    };
+
+    recognition.onerror = (e: any) => {
+      console.error("Speech Error", e);
+      setMicState('idle');
+    };
+
+    recognition.onend = () => {
+      // Vital: Speech recognition stops automatically after silence.
+      // If we are 'listening', we should restart it to keep listening (continuous)
+      // OR if we are 'thinking'/'speaking', we do NOTHING.
+      // But here we rely on single-shot.
+
+      // Fix: If state is 'listening' and we didn't trigger 'thinking' yet, it means silence.
+      // We can just go back to idle. 
+      // User says: "auto turning off" -> implies they want it ON longer?
+      // Or maybe it turns off prematurely?
+      // Let's ensure we only reset if we are NOT thinking.
+
+      // Actually, React state in callbacks behaves weirdly due to closures.
+      // We should use a ref or functional update.
+
+      setMicState((prev) => {
+        if (prev === 'listening') return 'idle';
+        return prev;
+      });
+    };
+
+    recognition.start();
+  }, [sessionStarted, micState, detectedEmotion]); // Added detectedEmotion to ensure latest emotion is sent? No, handled in handleUserMessage but deps are for useCallback closure.
+
+  const handleTextSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputText.trim()) return;
+    handleUserMessage(inputText);
+  };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-amber-50 via-teal-50 to-orange-50 animate-gradient-slow backdrop-grain font-manrope">
-      <TopBar
-        sessionDuration={sessionDuration}
-        micState={micState}
-        micEnabled={micEnabled}
-        onToggleMic={handleToggleMic}
-        onDownloadSummary={handleDownloadSummary}
-        onEndSession={endSession}
-        sessionStarted={sessionStarted}
-      />
-
-      {/* Speaking Indicator */}
-      {isSpeaking && (
-        <div className="fixed top-24 right-4 z-50 px-4 py-2 bg-teal-600/90 text-white rounded-full text-sm font-semibold shadow-lg backdrop-blur-sm animate-pulse flex items-center gap-2">
-          <span className="w-2 h-2 bg-white rounded-full animate-ping" />
-          Speaking...
-        </div>
-      )}
-
-      <main className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-32">
-        <div className="grid grid-cols-1 lg:col-span-3 gap-8">
-          <div className="lg:col-span-2 backdrop-blur-sm bg-white/60 rounded-2xl p-6 sm:p-8 shadow-lg border border-teal-100/50 max-h-[calc(100vh-280px)] overflow-y-auto">
-            <h2 className="font-sora text-lg font-semibold text-teal-900 mb-6">
-              Session Transcript
-            </h2>
-            {!sessionStarted ? (
-              <div className="text-center py-12">
-                <p className="text-gray-600 font-manrope mb-4">No session started yet</p>
-                <button
-                  onClick={initializeSession}
-                  disabled={loading}
-                  className="px-6 py-3 bg-teal-600 text-white rounded-lg font-semibold hover:bg-teal-700 disabled:opacity-50 transition-all font-sora shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
-                >
-                  {loading ? 'Starting...' : 'Start Session'}
-                </button>
-              </div>
-            ) : messages.length === 0 ? (
-              <div className="text-center py-12 text-gray-500">
-                <p className="font-manrope">Click the microphone to start talking</p>
-              </div>
-            ) : (
-              <Transcript messages={messages} />
-            )}
+    <div className="h-screen w-screen aurora-bg overflow-hidden flex flex-col font-manrope text-slate-800">
+      {/* HEADER */}
+      <div className="h-16 flex-none bg-white/70 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-6 shadow-sm z-10">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 bg-gradient-to-tr from-teal-400 to-blue-500 rounded-lg flex items-center justify-center font-bold text-white font-sora shadow-md shadow-teal-200">
+            F
           </div>
-
-          <div className="lg:col-span-1 sticky top-24 max-h-[calc(100vh-280px)] overflow-y-auto">
-            <SessionMirror
-              currentEmotion={currentEmotion}
-              emotionHistory={emotionHistory}
-              nextAction={currentAction}
-              videoRef={videoRef}
-            />
-          </div>
+          <h1 className="font-sora font-bold text-xl tracking-tight text-slate-800">Feelio</h1>
+          {backendStatus === 'offline' && (
+            <span className="px-2 py-0.5 bg-red-100 text-red-600 text-[10px] font-bold rounded-full border border-red-200">
+              OFFLINE
+            </span>
+          )}
         </div>
-      </main>
+        <div className="flex items-center gap-4 text-sm font-medium text-slate-500">
+          {sessionStarted && (
+            <div className="flex items-center gap-2 px-3 py-1 bg-white rounded-full border border-slate-200 shadow-sm">
+              <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+              {sessionDuration}
+            </div>
+          )}
+        </div>
+      </div>
 
-      <BottomDock
-        micState={micState}
-        captionsEnabled={captionsEnabled}
-        onMicPress={handleMicPress}
-        onIntentSelect={handleIntentSelect}
-        onToggleCaptions={handleToggleCaptions}
-        onOpenSafety={handleOpenSafety}
-      />
-
-      {showSafetyModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 animate-slide-in">
-            <div className="flex items-start justify-between mb-4">
-              <h3 className="font-sora text-xl font-semibold text-gray-900">
-                Safety Resources
-              </h3>
+      {/* MAIN CONTENT */}
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* VIDEO AREA */}
+        <div className="flex-1 relative flex flex-col items-center justify-center p-6 pb-24">
+          {!sessionStarted ? (
+            <div className="text-center space-y-8 max-w-md animate-fade-in glass-panel p-10 rounded-3xl">
+              <div className="w-28 h-28 mx-auto bg-slate-50 rounded-full flex items-center justify-center ring-4 ring-teal-100 shadow-inner">
+                <VideoIcon className="w-12 h-12 text-teal-400" />
+              </div>
+              <div>
+                <h2 className="text-3xl font-sora font-bold text-slate-800 mb-2">Hello there.</h2>
+                <p className="text-slate-500 text-lg leading-relaxed">
+                  I'm your AI companion. I can see you, hear you, and help you process your feelings.
+                </p>
+                {backendStatus === 'offline' && <p className="text-red-500 text-sm mt-4 font-bold">⚠️ Backend not connected. Please check server.</p>}
+              </div>
               <button
-                onClick={handleCloseSafety}
-                className="p-1 hover:bg-gray-100 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-gray-300"
-                aria-label="Close safety resources"
+                onClick={initializeSession}
+                disabled={loading || backendStatus === 'offline'}
+                className="w-full py-4 bg-teal-500 hover:bg-teal-400 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 transition-all rounded-xl font-bold text-lg text-white shadow-lg shadow-teal-200"
               >
-                <X className="w-5 h-5 text-gray-500" />
+                {loading ? 'Connecting...' : 'Start Session'}
               </button>
             </div>
+          ) : (
+            <div className="relative w-full max-w-5xl aspect-video bg-slate-900 rounded-3xl overflow-hidden shadow-2xl shadow-slate-300 ring-1 ring-white/50">
+              {/* VIDEO FEED */}
+              <video
+                ref={videoRef}
+                autoPlay playsInline muted
+                className="w-full h-full object-cover transform -scale-x-100 opacity-90"
+              />
 
-            <div className="space-y-4">
-              <div className="p-4 bg-rose-50 rounded-xl border border-rose-200">
-                <p className="text-sm font-manrope font-semibold text-rose-900 mb-2">
-                  National Suicide Prevention Lifeline
-                </p>
-                <p className="text-lg font-sora font-bold text-rose-700">988</p>
-                <p className="text-xs text-rose-600 mt-1">Available 24/7</p>
+              {/* VISION STATUS */}
+              {!visionLoaded && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-20">
+                  <div className="bg-white/90 px-4 py-2 rounded-lg flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-teal-500 animate-spin" />
+                    <span className="text-sm font-semibold">Loading Vision...</span>
+                  </div>
+                </div>
+              )}
+
+              {/* OVERLAYS */}
+              <div className="absolute top-6 left-6 flex gap-3">
+                <div className={`px-4 py-2 backdrop-blur-md rounded-xl border flex items-center gap-2 shadow-lg transition-colors ${emotionColors[currentEmotion] || emotionColors.calm}`}>
+                  <span className="text-xs uppercase tracking-wider font-bold opacity-70">Feeling</span>
+                  <span className="text-base font-bold capitalize">{currentEmotion}</span>
+                </div>
               </div>
 
-              <div className="p-4 bg-blue-50 rounded-xl border border-blue-200">
-                <p className="text-sm font-manrope font-semibold text-blue-900 mb-2">
-                  Crisis Text Line
-                </p>
-                <p className="text-lg font-sora font-bold text-blue-700">Text HOME to 741741</p>
-                <p className="text-xs text-blue-600 mt-1">Free, 24/7 crisis support</p>
-              </div>
+              {/* AI SPEAKING */}
+              {isSpeaking && (
+                <div className="absolute top-6 right-6 px-4 py-2 bg-white/90 backdrop-blur-md rounded-xl shadow-lg border border-white flex items-center gap-2 animate-pulse-soft">
+                  <div className="w-2 h-2 bg-teal-500 rounded-full" />
+                  <span className="text-sm font-bold text-slate-800">Speaking...</span>
+                </div>
+              )}
 
-              <div className="p-4 bg-teal-50 rounded-xl border border-teal-200">
-                <p className="text-sm font-manrope font-semibold text-teal-900 mb-2">
-                  SAMHSA National Helpline
-                </p>
-                <p className="text-lg font-sora font-bold text-teal-700">1-800-662-4357</p>
-                <p className="text-xs text-teal-600 mt-1">
-                  Treatment referral and information
-                </p>
+              {/* GRAPH */}
+              <div className="absolute bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-black/60 to-transparent flex items-end px-6 pb-0">
+                <div className="w-full h-16 flex items-end gap-1 opacity-90">
+                  {emotionHistory.slice(-40).map((pt, i) => (
+                    <div key={i} title={pt.emotion} className="flex-1 bg-white/40 hover:bg-teal-300 transition-colors rounded-t-sm" style={{ height: `${pt.intensity * 10}%` }} />
+                  ))}
+                  {emotionHistory.length === 0 && <span className="text-white/50 text-xs w-full text-center pb-2">Your emotional journey will appear here...</span>}
+                </div>
               </div>
-
-              <p className="text-xs text-gray-500 font-manrope text-center pt-2">
-                If you're experiencing a medical emergency, please call 911 immediately.
-              </p>
             </div>
+          )}
+        </div>
+
+        {/* TRANSCRIPT SIDEBAR */}
+        {sessionStarted && (
+          <div className="w-96 bg-white/60 backdrop-blur-md border-l border-white/50 hidden xl:flex flex-col shadow-xl z-20">
+            <div className="p-4 border-b border-slate-100">
+              <h3 className="font-sora font-semibold text-slate-700">Conversation</h3>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {messages.length === 0 && <p className="text-center text-slate-400 text-sm mt-10 italic">Say "Hello" to start...</p>}
+              {messages.map((msg) => (
+                <div key={msg.id} className={`flex flex-col ${msg.speaker === 'user' ? 'items-end' : 'items-start'}`}>
+                  <div className={`max-w-[85%] px-4 py-3 text-sm shadow-sm rounded-2xl ${msg.speaker === 'user'
+                    ? 'bg-teal-500 text-white rounded-tr-sm'
+                    : 'bg-white border border-slate-100 text-slate-700 rounded-tl-sm'
+                    }`}>
+                    {msg.text}
+                  </div>
+                  <span className="text-[10px] text-slate-400 mt-1 uppercase tracking-wide">{msg.speaker}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* BOTTOM CONTROL BAR */}
+      {sessionStarted && (
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-full max-w-2xl px-6 z-30">
+          <div className="glass-panel p-2 rounded-2xl flex items-center justify-between gap-4 shadow-2xl shadow-slate-300/50">
+
+            {/* END BUTTON */}
+            <button
+              onClick={endSession}
+              className="w-12 h-12 flex items-center justify-center rounded-xl bg-slate-100 hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors"
+              title="End Session"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            {/* INPUT AREA */}
+            <form onSubmit={handleTextSubmit} className="flex-1 flex gap-2">
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  value={inputText}
+                  onChange={(e) => setInputText(e.target.value)}
+                  placeholder="Type a thought..."
+                  className="w-full h-12 pl-4 pr-12 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500/50 focus:border-teal-400 transition-all text-sm font-medium text-slate-700 placeholder:text-slate-400"
+                />
+                <button
+                  type="submit"
+                  disabled={!inputText.trim() || micState !== 'idle'}
+                  className="absolute right-2 top-2 h-8 w-8 bg-teal-500 rounded-lg flex items-center justify-center text-white hover:bg-teal-400 disabled:opacity-50 transition-colors"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </div>
+            </form>
+
+            {/* MIC BUTTON */}
+            <button
+              onClick={handleMicPress}
+              className={`h-12 px-6 rounded-xl flex items-center gap-2 font-bold transition-all shadow-lg ${micState === 'listening' ? 'bg-red-500 text-white animate-pulse shadow-red-500/30' :
+                micState === 'thinking' ? 'bg-amber-400 text-white shadow-amber-400/30' :
+                  micState === 'speaking' ? 'bg-teal-500 text-white shadow-teal-500/30' :
+                    'bg-slate-800 text-white hover:bg-slate-700 shadow-slate-800/30'
+                }`}
+            >
+              {micState === 'listening' ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
+              <span>{micState === 'idle' ? 'Speak' : micState === 'listening' ? 'Listening' : micState === 'thinking' ? 'Thinking' : 'Speaking'}</span>
+            </button>
+
           </div>
         </div>
       )}
+
+      {/* SAFETY MODAL */}
+      {showSafetyModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-6">
+          <div className="bg-white p-8 rounded-3xl max-w-sm w-full shadow-2xl animate-fade-in text-center">
+            <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Activity className="w-8 h-8 text-red-500" />
+            </div>
+            <h3 className="text-2xl font-bold text-slate-800 mb-2">Safety Check</h3>
+            <p className="text-slate-500 mb-6">We detected some distress. Please remember I am an AI. If you are in crisis, please contact local emergency services.</p>
+            <button onClick={() => setShowSafetyModal(false)} className="w-full py-3 bg-slate-900 hover:bg-slate-800 rounded-xl text-white font-bold transition-colors">I Understand</button>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
