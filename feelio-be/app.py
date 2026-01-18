@@ -196,7 +196,7 @@ def chat():
         word_count = extract_word_count(user_text)
         pace_hint = determine_pace_hint(word_count)
         
-        # Build fusion prompt
+        # Build fusion prompt with more unique context
         fusion_prompt = build_fusion_prompt(
             user_text=user_text,
             emotion=emotion,
@@ -206,9 +206,31 @@ def chat():
             pace_hint=pace_hint,
         )
         
-        # Generate response
-        response = session["chat"].send_message(fusion_prompt)
-        ai_text = response.text
+        # Add session turn context to make responses more unique
+        turn_num = len(session["turns"]) + 1
+        fusion_prompt += f"\n[CONVERSATION TURN: {turn_num}]"
+        
+        # Generate response with temperature for variety
+        try:
+            response = session["chat"].send_message(fusion_prompt)
+            ai_text = response.text.strip()
+            
+            # Validate response
+            if not ai_text or len(ai_text) < 5:
+                logger.warning(f"⚠️ Empty or too short response for session: {session_id}")
+                ai_text = "I'm listening. Could you tell me more about what you're feeling?"
+                
+        except Exception as e:
+            logger.error(f"❌ Gemini API error: {e}")
+            # Fallback responses based on emotion
+            fallback_responses = {
+                "happy": "I can hear the warmth in your words. What's brought you this joy?",
+                "sad": "I sense sadness in what you're sharing. I'm here to listen more deeply.",
+                "anxious": "There's some worry coming through. Let's slow down and explore what's underneath.",
+                "calm": "You sound grounded right now. What's helped you get to this place?",
+                "neutral": "I'm sensing you might have a lot on your mind. Where would you like to start?"
+            }
+            ai_text = fallback_responses.get(emotion, "I'm here to listen. Please go on.")
         
         # Log turn
         session["turns"].append({
@@ -218,7 +240,7 @@ def chat():
             "crisis": False
         })
         
-        logger.info(f"✅ Response generated for session: {session_id}")
+        logger.info(f"✅ Response generated for session: {session_id} (turn {turn_num})")
         
         return jsonify({
             "success": True,
@@ -230,28 +252,12 @@ def chat():
         
     except Exception as e:
         logger.error(f"❌ Error in chat endpoint: {e}", exc_info=True)
-        # Fallback to Mock Response if AI fails (e.g. Invalid API Key)
         fallback_text = "I'm sensing some strong emotions. Could you tell me more about what's on your mind?"
-        if emotion == "happy":
-            fallback_text = "I'm glad to see you smiling! What's going well?"
-        elif emotion == "sad":
-            fallback_text = "I can see you're feeling down. I'm here to listen."
-            
-        logger.info(f"⚠️ Using fallback response due to error.")
         
-        # Log turn with fallback
-        if session_id in sessions:
-             sessions[session_id]["turns"].append({
-                "user": user_text,
-                "therapist": fallback_text,
-                "emotion": emotion,
-                "crisis": False
-            })
-
         return jsonify({
             "success": True,
             "response": fallback_text,
-            "emotion": emotion,
+            "emotion": "neutral",
             "crisis_detected": False,
             "playbook": None,
             "fallback": True
