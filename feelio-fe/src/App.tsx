@@ -131,20 +131,33 @@ function App() {
   const endSession = async () => {
     if (!sessionStarted) return;
     try {
-      await apiService.endSession();
-      setSessionStarted(false);
-      setMessages([]);
-      setEmotionHistory([]);
+      if (recognitionRef.current) {
+        recognitionRef.current.abort();
+        recognitionRef.current = null;
+      }
+      window.speechSynthesis.cancel();
+
       if (videoRef.current && videoRef.current.srcObject) {
         const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
         tracks.forEach(track => track.stop());
         videoRef.current.srcObject = null;
       }
-      window.speechSynthesis.cancel();
-    } catch (e) { console.error(e); }
+
+      await apiService.endSession();
+
+      setSessionStarted(false);
+      setMessages([]);
+      setEmotionHistory([]);
+      setMicState('idle');
+      isProcessingRef.current = false;
+    } catch (e) {
+      console.error("Error ending session:", e);
+    }
   };
 
   const detectedEmotionRef = useRef<Emotion>('calm');
+  const recognitionRef = useRef<any>(null);
+  const isProcessingRef = useRef(false);
 
   useEffect(() => {
     if (detectedEmotion) {
@@ -154,48 +167,58 @@ function App() {
   }, [detectedEmotion]);
 
   const handleUserMessage = async (text: string) => {
-    setMicState('thinking');
-    const map: Record<string, Emotion> = { 'happy': 'hopeful', 'sad': 'sad', 'surprise': 'confused', 'neutral': 'calm' };
-
-    // Optimistic UI Update
-    const currentMapped = detectedEmotionRef.current || 'calm';
-
-    const userMsg: TranscriptMessage = {
-      id: Date.now().toString(), speaker: 'user', text, timestamp: new Date(), emotion: currentMapped
-    };
-    setMessages(prev => [...prev, userMsg]);
-    setInputText('');
-
     try {
-      // Send REAL detected emotion to Backend
-      // Map back to simplified set if needed, but backend takes string.
-      // We pass the RAW detected emotion if possible, or the mapped one.
-      // Let's pass the mapped one as it aligns with UI.
+      if (!text.trim()) {
+        setMicState('idle');
+        isProcessingRef.current = false;
+        return;
+      }
+
+      setMicState('thinking');
+      const map: Record<string, Emotion> = { 'happy': 'hopeful', 'sad': 'sad', 'surprise': 'confused', 'neutral': 'calm' };
+
+      const currentMapped = detectedEmotionRef.current || 'calm';
+
+      const userMsg: TranscriptMessage = {
+        id: Date.now().toString(), speaker: 'user', text, timestamp: new Date(), emotion: currentMapped
+      };
+      setMessages(prev => [...prev, userMsg]);
+      setInputText('');
+
       const response = await apiService.sendMessage(text, currentMapped);
+
+      if (!response.response || response.response.trim().length === 0) {
+        throw new Error('Empty response from backend');
+      }
 
       const aiMsg: TranscriptMessage = {
         id: (Date.now() + 1).toString(), speaker: 'therapist', text: response.response, timestamp: new Date()
       };
       setMessages(prev => [...prev, aiMsg]);
 
-      // Process Emotion
-      const backendEmotion = response.emotion;
+      const backendEmotion = response.emotion || 'neutral';
       const uiEmotion = (emotionMap[backendEmotion] || map[backendEmotion] || 'calm') as Emotion;
       setEmotionHistory(prev => [...prev, {
         timestamp: new Date(), emotion: uiEmotion, intensity: emotionIntensityMap[backendEmotion] || 5
       }]);
 
-      // Speak
       setMicState('speaking');
-      speak(response.response, () => setMicState('idle'));
+      speak(response.response, () => {
+        setMicState('idle');
+        isProcessingRef.current = false;
+      });
 
-      if (response.crisis_detected) setShowSafetyModal(true);
+      if (response.crisis_detected) {
+        setShowSafetyModal(true);
+      }
 
     } catch (e) {
-      console.error("AI Error", e);
+      console.error("❌ AI Error", e);
       setMicState('idle');
+      isProcessingRef.current = false;
+
       const errorMsg: TranscriptMessage = {
-        id: Date.now().toString(), speaker: 'therapist', text: "I'm having trouble connecting to my brain right now.", timestamp: new Date()
+        id: Date.now().toString(), speaker: 'therapist', text: "I'm having trouble connecting right now. Let's try again.", timestamp: new Date()
       };
       setMessages(prev => [...prev, errorMsg]);
     }
@@ -204,9 +227,23 @@ function App() {
   const handleMicPress = useCallback(() => {
     if (!sessionStarted) { initializeSession(); return; }
 
+    // Stop current recognition if running
+    if (recognitionRef.current) {
+      recognitionRef.current.abort();
+      recognitionRef.current = null;
+    }
+
+    // User pressed to stop
     if (micState === 'listening' || micState === 'thinking' || micState === 'speaking') {
       setMicState('idle');
       window.speechSynthesis.cancel();
+      isProcessingRef.current = false;
+      return;
+    }
+
+    // Prevent duplicate messages
+    if (isProcessingRef.current) {
+      console.warn("Already processing a message");
       return;
     }
 
@@ -214,45 +251,61 @@ function App() {
     if (!SpeechRecognition) { alert("Use Chrome/Edge for voice."); return; }
 
     const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
     recognition.lang = 'en-US';
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
+    recognition.continuous = false;
 
     setMicState('listening');
 
+    recognition.onstart = () => {
+      console.log('🎙️ Listening...');
+    };
+
     recognition.onresult = (event: any) => {
-      const text = event.results[0][0].transcript;
-      if (text) handleUserMessage(text);
+      try {
+        if (isProcessingRef.current) {
+          console.warn("Already processing, ignoring duplicate result");
+          return;
+        }
+
+        const text = event.results[0]?.[0]?.transcript?.trim();
+        if (text && text.length > 0) {
+          isProcessingRef.current = true;
+          handleUserMessage(text);
+        } else {
+          setMicState('idle');
+        }
+      } catch (e) {
+        console.error("Error in onresult:", e);
+        setMicState('idle');
+        isProcessingRef.current = false;
+      }
     };
 
     recognition.onerror = (e: any) => {
-      console.error("Speech Error", e);
+      console.error("🎙️ Speech Error", e.error);
       setMicState('idle');
+      isProcessingRef.current = false;
     };
 
     recognition.onend = () => {
-      // Vital: Speech recognition stops automatically after silence.
-      // If we are 'listening', we should restart it to keep listening (continuous)
-      // OR if we are 'thinking'/'speaking', we do NOTHING.
-      // But here we rely on single-shot.
-
-      // Fix: If state is 'listening' and we didn't trigger 'thinking' yet, it means silence.
-      // We can just go back to idle. 
-      // User says: "auto turning off" -> implies they want it ON longer?
-      // Or maybe it turns off prematurely?
-      // Let's ensure we only reset if we are NOT thinking.
-
-      // Actually, React state in callbacks behaves weirdly due to closures.
-      // We should use a ref or functional update.
-
-      setMicState((prev) => {
-        if (prev === 'listening') return 'idle';
-        return prev;
-      });
+      console.log('🎙️ Recognition ended');
+      if (!isProcessingRef.current) {
+        setMicState('idle');
+      }
+      recognitionRef.current = null;
     };
 
-    recognition.start();
-  }, [sessionStarted, micState, detectedEmotion]); // Added detectedEmotion to ensure latest emotion is sent? No, handled in handleUserMessage but deps are for useCallback closure.
+    try {
+      recognition.start();
+    } catch (e) {
+      console.error("Failed to start recognition:", e);
+      setMicState('idle');
+      isProcessingRef.current = false;
+    }
+  }, [sessionStarted, micState]);
 
   const handleTextSubmit = (e: React.FormEvent) => {
     e.preventDefault();
